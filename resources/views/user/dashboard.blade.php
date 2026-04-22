@@ -79,7 +79,7 @@
                 <i data-lucide="calendar" class="h-5 w-5 flex-shrink-0"></i>
                 Riwayat Peminjaman
             </a>
-            <a href="#"
+            <a href="{{ route('ruangan.index') }}"
                class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10 hover:text-white hover:scale-105 transition-all duration-200">
                 <i data-lucide="door-open" class="h-5 w-5 flex-shrink-0"></i>
                 Ruangan
