@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -21,6 +20,7 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'is_active',
     ];
 
     /**
@@ -43,6 +43,41 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
+    }
+
+    // ── Relationships ──
+
+    public function bookings()
+    {
+        return $this->hasMany(Booking::class);
+    }
+
+    public function sipinjamNotifications()
+    {
+        return $this->hasMany(SipinjamNotification::class);
+    }
+
+    public function deactivations()
+    {
+        return $this->hasMany(UserDeactivation::class);
+    }
+
+    // ── Helpers ──
+
+    public function isAdmin(): bool
+    {
+        return strtolower($this->role) === 'admin';
+    }
+
+    public function isUser(): bool
+    {
+        return strtolower($this->role) === 'user';
+    }
+
+    public function getInitialsAttribute(): string
+    {
+        return strtoupper(substr($this->name, 0, 2));
     }
 }
