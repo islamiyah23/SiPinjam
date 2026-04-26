@@ -21,14 +21,45 @@ class AuthenticatedSessionController extends Controller
 
     /**
      * Handle an incoming authentication request.
+     * Validates role match and is_active, then redirects based on role.
      */
     public function store(LoginRequest $request): RedirectResponse
     {
         $request->authenticate();
 
+        $user = Auth::user();
+
+        // Check if account is active
+        if (!$user->is_active) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            return back()->withErrors([
+                'email' => 'Akun Anda telah dinonaktifkan.',
+            ])->onlyInput('email');
+        }
+
+        // Check if submitted role matches user's actual role
+        $submittedRole = $request->input('role', 'user');
+        if (strtolower($user->role) !== strtolower($submittedRole)) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            return back()->withErrors([
+                'email' => 'Role tidak sesuai.',
+            ])->onlyInput('email');
+        }
+
         $request->session()->regenerate();
 
-        return redirect()->intended(route('dashboard', absolute: false));
+        // Role-based redirect
+        if ($user->isAdmin()) {
+            return redirect()->intended(route('admin.dashboard'));
+        }
+
+        return redirect()->intended(route('user.dashboard'));
     }
 
     /**
