@@ -104,8 +104,8 @@ class ReportController extends Controller
         ->format('a4')
         ->withBrowsershot(fn ($browsershot) => $browsershot
             ->noSandbox()
-            ->setNodeBinary('/home/blewah/.local/share/fnm/node-versions/v20.20.2/installation/bin/node')
-            ->setNpmBinary('/home/blewah/.local/share/fnm/node-versions/v20.20.2/installation/bin/npm')
+            ->setNodeBinary(env('NODE_BINARY_PATH', 'node'))
+            ->setNpmBinary(env('NPM_BINARY_PATH', 'npm'))
         );
 
         $filename = 'Laporan_Peminjaman_' . $startDate . '_' . $endDate . '.pdf';
@@ -218,8 +218,8 @@ class ReportController extends Controller
             ->format('a4')
             ->withBrowsershot(fn ($browsershot) => $browsershot
                 ->noSandbox()
-                ->setNodeBinary('/home/blewah/.local/share/fnm/node-versions/v20.20.2/installation/bin/node')
-                ->setNpmBinary('/home/blewah/.local/share/fnm/node-versions/v20.20.2/installation/bin/npm')
+                ->setNodeBinary(env('NODE_BINARY_PATH', 'node'))
+                ->setNpmBinary(env('NPM_BINARY_PATH', 'npm'))
             );
 
         $filename = 'Riwayat_Peminjaman_' . str_replace(' ', '_', $user->name) . '.pdf';
