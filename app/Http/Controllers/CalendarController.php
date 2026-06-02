@@ -82,8 +82,8 @@ class CalendarController extends Controller
         ->format('a4')
         ->withBrowsershot(fn ($browsershot) => $browsershot
             ->noSandbox()
-            ->setNodeBinary('/home/blewah/.local/share/fnm/node-versions/v20.20.2/installation/bin/node')
-            ->setNpmBinary('/home/blewah/.local/share/fnm/node-versions/v20.20.2/installation/bin/npm')
+            ->setNodeBinary(env('NODE_BINARY_PATH', 'node'))
+            ->setNpmBinary(env('NPM_BINARY_PATH', 'npm'))
         );
 
         return $pdf->download("Kalender_Akademik_STITEK_{$calendar->year}.pdf");
