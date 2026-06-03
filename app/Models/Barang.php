@@ -20,5 +20,11 @@ class Barang extends Model
         'deskripsi',
         'status',
         'foto',
+        'image_path',
     ];
+
+    public function peminjamans()
+    {
+        return $this->hasMany(Peminjaman::class, 'barang_id');
+    }
 }

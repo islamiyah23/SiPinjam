@@ -3,14 +3,21 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Peminjaman;
-use App\Models\User;
-use App\Models\Ruangan;
+use App\Http\Requests\StoreBarangRequest;
+use App\Http\Requests\StoreRuanganRequest;
+use App\Http\Requests\UpdateBarangRequest;
+use App\Http\Requests\UpdateRuanganRequest;
 use App\Models\Barang;
+use App\Models\Peminjaman;
+use App\Models\Ruangan;
+use App\Models\User;
 use App\Services\BookingService;
+use App\Services\ImageService;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Inertia\Inertia;
 
 class AdminController extends Controller
 {
@@ -21,21 +28,59 @@ class AdminController extends Controller
     // ────────────────────────────────────────
     // Dashboard
     // ────────────────────────────────────────
-    public function dashboard(): \Illuminate\View\View
+    public function dashboard()
     {
-        return view('admin.dashboard');
+        $totalPending = Peminjaman::where('status', Peminjaman::STATUS_PENDING)->count();
+        $totalApproved = Peminjaman::where('status', Peminjaman::STATUS_APPROVED)->count();
+        $totalUsers = User::count();
+        $totalRuangan = Ruangan::count();
+        $totalBarang = Barang::count();
+
+        // Peminjaman sedang berjalan (untuk tabel countdown)
+        $activePeminjamans = Peminjaman::with(['user', 'ruangan', 'barang'])
+            ->where('status', Peminjaman::STATUS_APPROVED)
+            ->orderBy('tanggal_selesai')
+            ->orderBy('jam_selesai')
+            ->get()
+            ->map(function (Peminjaman $p) {
+                return [
+                    'id'              => $p->id,
+                    'user_name'       => $p->user?->name ?? '-',
+                    'nama_item'       => $p->nama_item,
+                    'tipe'            => $p->tipe,
+                    'tanggal_mulai'   => $p->tanggal_mulai?->format('Y-m-d'),
+                    'tanggal_selesai' => $p->tanggal_selesai?->format('Y-m-d'),
+                    'jam_mulai'       => $p->jam_mulai,
+                    'jam_selesai'     => $p->jam_selesai,
+                    // Target datetime for countdown (ISO 8601)
+                    'target_datetime' => $p->tanggal_selesai?->format('Y-m-d') . 'T' . $p->jam_selesai . ':00',
+                ];
+            });
+
+        return Inertia::render('Admin/Dashboard', [
+            'stats' => [
+                'pending'   => $totalPending,
+                'approved'  => $totalApproved,
+                'users'     => $totalUsers,
+                'ruangan'   => $totalRuangan,
+                'barang'    => $totalBarang,
+            ],
+            'activePeminjamans' => $activePeminjamans,
+        ]);
     }
 
     // ════════════════════════════════════════
     // KELOLA USER — CRUD Lengkap
     // ════════════════════════════════════════
-    public function kelolaUser(): \Illuminate\View\View
+    public function kelolaUser()
     {
         $users = User::orderBy('created_at', 'desc')->get();
-        return view('admin.kelola_user', compact('users'));
+        return Inertia::render('Admin/KelolaUser', [
+            'users' => $users,
+        ]);
     }
 
-    public function storeUser(Request $request): \Illuminate\Http\RedirectResponse
+    public function storeUser(Request $request): RedirectResponse
     {
         $request->validate([
             'name'     => 'required|string|max:255',
@@ -45,12 +90,13 @@ class AdminController extends Controller
         ]);
 
         try {
-            User::create([
+            $user = User::create([
                 'name'     => $request->name,
                 'email'    => $request->email,
                 'password' => Hash::make($request->password),
                 'role'     => $request->role,
             ]);
+            $user->assignRole($request->role);
 
             return redirect()->back()->with('success', 'User berhasil ditambahkan!');
         } catch (\Throwable $e) {
@@ -58,7 +104,7 @@ class AdminController extends Controller
         }
     }
 
-    public function updateUser(Request $request, int $id): \Illuminate\Http\RedirectResponse
+    public function updateUser(Request $request, int $id): RedirectResponse
     {
         $request->validate([
             'name'  => 'required|string|max:255',
@@ -75,12 +121,12 @@ class AdminController extends Controller
                 'role'  => $request->role,
             ];
 
-            // Hanya update password jika diisi
             if ($request->filled('password')) {
                 $data['password'] = Hash::make($request->password);
             }
 
             $user->update($data);
+            $user->syncRoles([$request->role]);
 
             return redirect()->back()->with('success', 'User berhasil diperbarui!');
         } catch (\Throwable $e) {
@@ -88,12 +134,11 @@ class AdminController extends Controller
         }
     }
 
-    public function destroyUser(int $id): \Illuminate\Http\RedirectResponse
+    public function destroyUser(int $id): RedirectResponse
     {
         try {
             $user = User::findOrFail($id);
 
-            // Cegah admin menghapus dirinya sendiri
             if ($user->id === auth()->id()) {
                 return redirect()->back()->with('error', 'Anda tidak bisa menghapus akun sendiri!');
             }
@@ -109,13 +154,15 @@ class AdminController extends Controller
     // ════════════════════════════════════════
     // KELOLA PEMINJAMAN
     // ════════════════════════════════════════
-    public function kelolaPeminjaman(): \Illuminate\View\View
+    public function kelolaPeminjaman()
     {
-        $peminjamans = Peminjaman::with('user')->orderBy('created_at', 'desc')->get();
-        return view('admin.kelola_peminjaman', compact('peminjamans'));
+        $peminjamans = Peminjaman::with(['user', 'ruangan', 'barang'])->orderBy('created_at', 'desc')->get();
+        return Inertia::render('Admin/KelolaPeminjaman', [
+            'peminjamans' => $peminjamans,
+        ]);
     }
 
-    public function setujuiPeminjaman(int $id): \Illuminate\Http\RedirectResponse
+    public function setujuiPeminjaman(int $id): RedirectResponse
     {
         try {
             $peminjaman = Peminjaman::findOrFail($id);
@@ -126,7 +173,7 @@ class AdminController extends Controller
         }
     }
 
-    public function tolakPeminjaman(int $id): \Illuminate\Http\RedirectResponse
+    public function tolakPeminjaman(int $id): RedirectResponse
     {
         try {
             $peminjaman = Peminjaman::findOrFail($id);
@@ -137,32 +184,38 @@ class AdminController extends Controller
         }
     }
 
+    /**
+     * Admin menandai peminjaman selesai (validasi pengembalian).
+     */
+    public function selesaiPeminjaman(int $id): RedirectResponse
+    {
+        try {
+            $peminjaman = Peminjaman::findOrFail($id);
+            $this->bookingService->completeBooking($peminjaman);
+            return redirect()->back()->with('success', 'Peminjaman berhasil diselesaikan dan stok dikembalikan!');
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Gagal menyelesaikan peminjaman: ' . $e->getMessage());
+        }
+    }
+
     // ════════════════════════════════════════
     // KELOLA RUANGAN — CRUD Lengkap
     // ════════════════════════════════════════
-    public function kelolaRuangan(): \Illuminate\View\View
+    public function kelolaRuangan()
     {
         $ruangans = Ruangan::orderBy('created_at', 'desc')->get();
-        return view('admin.kelola_ruangan', compact('ruangans'));
+        return Inertia::render('Admin/KelolaRuangan', [
+            'ruangans' => $ruangans,
+        ]);
     }
 
-    public function storeRuangan(Request $request): \Illuminate\Http\RedirectResponse
+    public function storeRuangan(StoreRuanganRequest $request): RedirectResponse
     {
-        $request->validate([
-            'nama'      => 'required|string|max:255',
-            'kode'      => 'required|string|max:50|unique:ruangans,kode',
-            'kapasitas' => 'required|integer|min:1',
-            'lokasi'    => 'nullable|string|max:255',
-            'deskripsi' => 'nullable|string',
-            'status'    => 'required|in:tersedia,tidak_tersedia',
-            'foto'      => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
-        ]);
-
         try {
             $data = $request->only(['nama', 'kode', 'kapasitas', 'lokasi', 'deskripsi', 'status']);
 
-            if ($request->hasFile('foto')) {
-                $data['foto'] = $request->file('foto')->store('ruangan', 'public');
+            if ($request->hasFile('image_path')) {
+                $data['image_path'] = ImageService::cropAndSave($request->file('image_path'), 'ruangan');
             }
 
             Ruangan::create($data);
@@ -173,28 +226,15 @@ class AdminController extends Controller
         }
     }
 
-    public function updateRuangan(Request $request, int $id): \Illuminate\Http\RedirectResponse
+    public function updateRuangan(UpdateRuanganRequest $request, int $id): RedirectResponse
     {
-        $request->validate([
-            'nama'      => 'required|string|max:255',
-            'kode'      => 'required|string|max:50|unique:ruangans,kode,' . $id,
-            'kapasitas' => 'required|integer|min:1',
-            'lokasi'    => 'nullable|string|max:255',
-            'deskripsi' => 'nullable|string',
-            'status'    => 'required|in:tersedia,tidak_tersedia',
-            'foto'      => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
-        ]);
-
         try {
             $ruangan = Ruangan::findOrFail($id);
             $data = $request->only(['nama', 'kode', 'kapasitas', 'lokasi', 'deskripsi', 'status']);
 
-            if ($request->hasFile('foto')) {
-                // Hapus foto lama jika ada
-                if ($ruangan->foto) {
-                    Storage::disk('public')->delete($ruangan->foto);
-                }
-                $data['foto'] = $request->file('foto')->store('ruangan', 'public');
+            if ($request->hasFile('image_path')) {
+                ImageService::deleteOldImage($ruangan->image_path);
+                $data['image_path'] = ImageService::cropAndSave($request->file('image_path'), 'ruangan');
             }
 
             $ruangan->update($data);
@@ -205,14 +245,12 @@ class AdminController extends Controller
         }
     }
 
-    public function destroyRuangan(int $id): \Illuminate\Http\RedirectResponse
+    public function destroyRuangan(int $id): RedirectResponse
     {
         try {
             $ruangan = Ruangan::findOrFail($id);
 
-            if ($ruangan->foto) {
-                Storage::disk('public')->delete($ruangan->foto);
-            }
+            ImageService::deleteOldImage($ruangan->image_path);
 
             $ruangan->delete();
 
@@ -225,30 +263,21 @@ class AdminController extends Controller
     // ════════════════════════════════════════
     // KELOLA BARANG — CRUD Lengkap
     // ════════════════════════════════════════
-    public function kelolaBarang(): \Illuminate\View\View
+    public function kelolaBarang()
     {
         $barangs = Barang::orderBy('created_at', 'desc')->get();
-        return view('admin.kelola_barang', compact('barangs'));
+        return Inertia::render('Admin/KelolaBarang', [
+            'barangs' => $barangs,
+        ]);
     }
 
-    public function storeBarang(Request $request): \Illuminate\Http\RedirectResponse
+    public function storeBarang(StoreBarangRequest $request): RedirectResponse
     {
-        $request->validate([
-            'nama'           => 'required|string|max:255',
-            'kode'           => 'required|string|max:50|unique:barangs,kode',
-            'stok_total'     => 'required|integer|min:0',
-            'stok_tersedia'  => 'required|integer|min:0',
-            'kategori'       => 'nullable|string|max:100',
-            'deskripsi'      => 'nullable|string',
-            'status'         => 'required|in:tersedia,tidak_tersedia',
-            'foto'           => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
-        ]);
-
         try {
             $data = $request->only(['nama', 'kode', 'stok_total', 'stok_tersedia', 'kategori', 'deskripsi', 'status']);
 
-            if ($request->hasFile('foto')) {
-                $data['foto'] = $request->file('foto')->store('barang', 'public');
+            if ($request->hasFile('image_path')) {
+                $data['image_path'] = ImageService::cropAndSave($request->file('image_path'), 'barang');
             }
 
             Barang::create($data);
@@ -259,28 +288,15 @@ class AdminController extends Controller
         }
     }
 
-    public function updateBarang(Request $request, int $id): \Illuminate\Http\RedirectResponse
+    public function updateBarang(UpdateBarangRequest $request, int $id): RedirectResponse
     {
-        $request->validate([
-            'nama'           => 'required|string|max:255',
-            'kode'           => 'required|string|max:50|unique:barangs,kode,' . $id,
-            'stok_total'     => 'required|integer|min:0',
-            'stok_tersedia'  => 'required|integer|min:0',
-            'kategori'       => 'nullable|string|max:100',
-            'deskripsi'      => 'nullable|string',
-            'status'         => 'required|in:tersedia,tidak_tersedia',
-            'foto'           => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
-        ]);
-
         try {
             $barang = Barang::findOrFail($id);
             $data = $request->only(['nama', 'kode', 'stok_total', 'stok_tersedia', 'kategori', 'deskripsi', 'status']);
 
-            if ($request->hasFile('foto')) {
-                if ($barang->foto) {
-                    Storage::disk('public')->delete($barang->foto);
-                }
-                $data['foto'] = $request->file('foto')->store('barang', 'public');
+            if ($request->hasFile('image_path')) {
+                ImageService::deleteOldImage($barang->image_path);
+                $data['image_path'] = ImageService::cropAndSave($request->file('image_path'), 'barang');
             }
 
             $barang->update($data);
@@ -291,14 +307,12 @@ class AdminController extends Controller
         }
     }
 
-    public function destroyBarang(int $id): \Illuminate\Http\RedirectResponse
+    public function destroyBarang(int $id): RedirectResponse
     {
         try {
             $barang = Barang::findOrFail($id);
 
-            if ($barang->foto) {
-                Storage::disk('public')->delete($barang->foto);
-            }
+            ImageService::deleteOldImage($barang->image_path);
 
             $barang->delete();
 
@@ -306,5 +320,129 @@ class AdminController extends Controller
         } catch (\Throwable $e) {
             return redirect()->back()->with('error', 'Gagal menghapus barang: ' . $e->getMessage());
         }
+    }
+
+    // ════════════════════════════════════════
+    // LAPOR RUANGAN BERANTAKAN
+    // ════════════════════════════════════════
+
+    /**
+     * Cari peminjaman terakhir yang selesai (check-out) pada ruangan di hari ini,
+     * lalu blokir user yang bersangkutan selama 30 hari.
+     */
+    public function laporBerantakan(Request $request, int $id): RedirectResponse
+    {
+        $request->validate([
+            'feedback' => 'required|string|max:500',
+        ]);
+
+        try {
+            $ruangan = Ruangan::findOrFail($id);
+
+            // Cari peminjaman "selesai" paling terakhir pada ruangan ini hari ini
+            $peminjaman = Peminjaman::where('ruangan_id', $ruangan->id)
+                ->where('status', Peminjaman::STATUS_DONE)
+                ->whereDate('tanggal_selesai', today())
+                ->latest('completed_at')
+                ->with('user')
+                ->first();
+
+            // Fallback: jika tidak ada yang selesai hari ini,
+            // cari yang masih "sedang_dipinjam" pada ruangan hari ini
+            if (!$peminjaman) {
+                $peminjaman = Peminjaman::where('ruangan_id', $ruangan->id)
+                    ->where('status', Peminjaman::STATUS_APPROVED)
+                    ->whereDate('tanggal_mulai', '<=', today())
+                    ->whereDate('tanggal_selesai', '>=', today())
+                    ->latest('created_at')
+                    ->with('user')
+                    ->first();
+            }
+
+            if (!$peminjaman || !$peminjaman->user) {
+                return redirect()->back()->with(
+                    'error',
+                    "Tidak ditemukan peminjaman terkait pada ruangan \"{$ruangan->nama}\" hari ini."
+                );
+            }
+
+            $user = $peminjaman->user;
+
+            // Jangan blokir admin
+            if ($user->hasRole('admin')) {
+                return redirect()->back()->with(
+                    'error',
+                    'Tidak dapat menerapkan sanksi ke akun admin.'
+                );
+            }
+
+            // Jika user sudah diblokir, skip
+            if ($user->isBlocked()) {
+                return redirect()->back()->with(
+                    'error',
+                    "User \"{$user->name}\" sudah dalam status blokir."
+                );
+            }
+
+            $user->blockFor(30, $request->input('feedback'));
+
+            return redirect()->back()->with(
+                'success',
+                "User \"{$user->name}\" (peminjam terakhir ruangan \"{$ruangan->nama}\") telah diblokir selama 30 hari."
+            );
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', 'Gagal melapor: ' . $e->getMessage());
+        }
+    }
+
+    // ════════════════════════════════════════
+    // PROFILE ADMIN
+    // ════════════════════════════════════════
+
+    public function profileEdit()
+    {
+        return Inertia::render('Admin/ProfileEdit', [
+            'user' => auth()->user(),
+        ]);
+    }
+
+    public function profileUpdate(Request $request): RedirectResponse
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'name'     => 'required|string|max:255',
+            'nickname' => 'nullable|string|max:100',
+            'email'    => 'required|email|unique:users,email,' . $user->id,
+            'password' => 'nullable|string|min:6|confirmed',
+            'avatar'   => 'nullable|image|mimes:jpg,jpeg,png,webp|max:5120',
+        ]);
+
+        $user->name = $request->name;
+        $user->nickname = $request->nickname;
+
+        if ($user->email !== $request->email) {
+            $user->email = $request->email;
+            $user->email_verified_at = null;
+        }
+
+        if ($request->filled('password')) {
+            $user->password = bcrypt($request->password);
+        }
+
+        if ($request->hasFile('avatar')) {
+            if ($user->avatar) {
+                $oldPath = str_replace('/storage/', '', $user->avatar);
+                if (Storage::disk('public')->exists($oldPath)) {
+                    Storage::disk('public')->delete($oldPath);
+                }
+            }
+            $path = $request->file('avatar')->store('avatars', 'public');
+            $user->avatar = '/storage/' . $path;
+        }
+
+        $user->save();
+
+        return redirect()->route('admin.profile.edit')->with('success', 'Profil berhasil diperbarui!');
     }
 }

@@ -35,6 +35,7 @@ class Peminjaman extends Model
         'barang_id',
         'ruangan_id',
         'nama_item',
+        'jumlah',
         'tanggal',
         'tanggal_mulai',
         'tanggal_selesai',
@@ -42,6 +43,9 @@ class Peminjaman extends Model
         'jam_selesai',
         'keterangan',
         'status',
+        'nomor_surat',
+        'approved_at',
+        'completed_at',
     ];
 
     protected function casts(): array
@@ -49,6 +53,9 @@ class Peminjaman extends Model
         return [
             'tanggal_mulai'   => 'date',
             'tanggal_selesai' => 'date',
+            'approved_at'     => 'datetime',
+            'completed_at'    => 'datetime',
+            'jumlah'          => 'integer',
         ];
     }
 
@@ -67,5 +74,27 @@ class Peminjaman extends Model
     public function ruangan(): BelongsTo
     {
         return $this->belongsTo(Ruangan::class, 'ruangan_id');
+    }
+
+    // ── Auto-Increment Nomor Surat ───────────────────
+
+    /**
+     * Generate nomor surat otomatis per tahun berjalan.
+     * Format: {XXX}/INT/SIPINJAM/{YYYY}
+     * Contoh: 001/INT/SIPINJAM/2026, 002/INT/SIPINJAM/2026
+     */
+    public static function generateNomorSurat(): string
+    {
+        $year = now()->year;
+        $suffix = "/INT/SIPINJAM/{$year}";
+
+        // Hitung jumlah surat yang sudah terbit tahun ini
+        $count = static::whereNotNull('nomor_surat')
+            ->where('nomor_surat', 'LIKE', "%{$suffix}")
+            ->count();
+
+        $nextNumber = str_pad($count + 1, 3, '0', STR_PAD_LEFT);
+
+        return "{$nextNumber}{$suffix}";
     }
 }

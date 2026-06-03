@@ -2,63 +2,132 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\StoreCalendarRequest;
 use App\Models\Calendar;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Barryvdh\DomPDF\Facade\Pdf;
+use App\Services\ImageService;
+use Illuminate\Http\RedirectResponse;
+use Inertia\Inertia;
+use Spatie\LaravelPdf\Facades\Pdf;
 
 class CalendarController extends Controller
 {
     // ── USER: Tampilkan kalender aktif ──────────────────
 
-    public function index(): \Illuminate\View\View
+    public function index()
     {
         $calendar = Calendar::where('is_active', true)->latest()->first();
 
-        return view('user.kalender.index', compact('calendar'));
+        return Inertia::render('User/Kalender', [
+            'calendar' => $calendar,
+        ]);
     }
 
     /**
      * Export kalender aktif ke PDF.
      * Gambar dikonversi ke Base64 agar DomPDF pasti bisa me-render-nya.
      */
-    public function exportPdf(): \Symfony\Component\HttpFoundation\Response
+    public function exportPdf()
     {
-        $calendar = Calendar::where('is_active', true)->latest()->firstOrFail();
+        $calendar = Calendar::where('is_active', true)->latest()->first();
 
-        // Dapatkan path absolut gambar dan konversi ke Base64
-        $absolutePath = storage_path('app/public/' . $calendar->image_path);
-        $imageData    = base64_encode(file_get_contents($absolutePath));
-        $mimeType     = mime_content_type($absolutePath);
-        $base64Image  = "data:{$mimeType};base64,{$imageData}";
+        if (!$calendar) {
+            return redirect()->back()->with('error', 'Tidak ada kalender akademik aktif.');
+        }
 
-        $pdf = Pdf::loadView('user.kalender.pdf', compact('calendar', 'base64Image'))
-                  ->setPaper('a4', 'portrait');
+        $cleanPath = ltrim($calendar->image_path, '/');
+
+        if (str_starts_with($cleanPath, 'image/')) {
+            $absolutePath = public_path($cleanPath);
+        } else {
+            if (str_starts_with($cleanPath, 'storage/')) {
+                $cleanPath = substr($cleanPath, 8);
+            }
+            $absolutePath = storage_path('app/public/' . $cleanPath);
+        }
+
+        if (!file_exists($absolutePath)) {
+            $fallbackPath = public_path('storage/' . $cleanPath);
+            if (file_exists($fallbackPath)) {
+                $absolutePath = $fallbackPath;
+            } else {
+                if (str_starts_with($cleanPath, 'public/')) {
+                    $fallbackPath2 = storage_path('app/' . $cleanPath);
+                    if (file_exists($fallbackPath2)) {
+                        $absolutePath = $fallbackPath2;
+                    } else {
+                        return redirect()->back()->with('error', 'Berkas kalender tidak ditemukan di server.');
+                    }
+                } else {
+                    return redirect()->back()->with('error', 'Berkas kalender tidak ditemukan di server.');
+                }
+            }
+        }
+
+        if (strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION)) === 'pdf') {
+            return response()->download($absolutePath, "Kalender_Akademik_STITEK_{$calendar->year}.pdf", [
+                'Content-Type' => 'application/pdf',
+            ]);
+        }
+
+        // Convert image to base64 to ensure it renders correctly in headless Chrome
+        $type = pathinfo($absolutePath, PATHINFO_EXTENSION);
+        $data = file_get_contents($absolutePath);
+        $base64 = 'data:image/' . $type . ';base64,' . base64_encode($data);
+
+        $nodeBinary = env('NODE_BINARY_PATH');
+        $npmBinary = env('NPM_BINARY_PATH');
+
+        if (empty($nodeBinary) || empty($npmBinary)) {
+            $isWindows = PHP_OS_FAMILY === 'Windows' || stristr(PHP_OS, 'WIN');
+            if ($isWindows) {
+                $nodeBinary = $nodeBinary ?: 'C:\\Program Files\\nodejs\\node.exe';
+                $npmBinary = $npmBinary ?: 'C:\\Program Files\\nodejs\\npm.cmd';
+            } else {
+                $nodeBinary = $nodeBinary ?: '/usr/bin/node';
+                $npmBinary = $npmBinary ?: '/usr/bin/npm';
+            }
+        }
+
+        $pdf = Pdf::view('user.kalender.pdf', [
+            'calendar' => $calendar,
+            'imagePath' => $base64
+        ])
+        ->landscape()
+        ->format('a4')
+        ->withBrowsershot(function ($browsershot) use ($nodeBinary, $npmBinary) {
+            $browsershot->noSandbox();
+            if (!empty($nodeBinary)) {
+                $browsershot->setNodeBinary($nodeBinary);
+            }
+            if (!empty($npmBinary)) {
+                $browsershot->setNpmBinary($npmBinary);
+            }
+        });
 
         return $pdf->download("Kalender_Akademik_STITEK_{$calendar->year}.pdf");
     }
 
     // ── ADMIN: Kelola kalender ──────────────────────────
 
-    public function adminIndex(): \Illuminate\View\View
+    public function adminIndex()
     {
         $calendars = Calendar::orderByDesc('year')->get();
 
-        return view('admin.kelola_kalender', compact('calendars'));
+        return Inertia::render('Admin/KelolaKalender', [
+            'calendars' => $calendars,
+        ]);
     }
 
     /**
-     * Upload gambar kalender baru.
+     * Upload gambar/PDF kalender baru.
      */
-    public function store(Request $request): \Illuminate\Http\RedirectResponse
+    public function store(StoreCalendarRequest $request): RedirectResponse
     {
-        $request->validate([
-            'image' => 'required|image|mimes:jpeg,png,jpg,webp|max:5120', // max 5MB
-            'year'  => 'required|integer|min:2020|max:2100',
-        ]);
-
         try {
-            $path = $request->file('image')->store('calendars', 'public');
+            $path = null;
+            if ($request->hasFile('image_path')) {
+                $path = ImageService::cropAndSave($request->file('image_path'), 'calendars');
+            }
 
             Calendar::create([
                 'image_path' => $path,
@@ -75,7 +144,7 @@ class CalendarController extends Controller
     /**
      * Set kalender sebagai aktif (hanya satu yang aktif pada satu waktu).
      */
-    public function setActive(int $id): \Illuminate\Http\RedirectResponse
+    public function setActive(int $id): RedirectResponse
     {
         try {
             // Non-aktifkan semua kalender terlebih dahulu
@@ -94,15 +163,12 @@ class CalendarController extends Controller
     /**
      * Hapus kalender.
      */
-    public function destroy(int $id): \Illuminate\Http\RedirectResponse
+    public function destroy(int $id): RedirectResponse
     {
         try {
             $calendar = Calendar::findOrFail($id);
 
-            // Hapus file gambar dari storage
-            if (Storage::disk('public')->exists($calendar->image_path)) {
-                Storage::disk('public')->delete($calendar->image_path);
-            }
+            ImageService::deleteOldImage($calendar->image_path);
 
             $calendar->delete();
 
